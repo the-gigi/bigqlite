@@ -1,11 +1,12 @@
 import csv
 import functools
 import glob
+import logging
 import multiprocessing
 import os
 import shutil
 import sqlite3
-import types
+import sys
 
 import sh
 
@@ -20,6 +21,13 @@ class Engine:
         self.has_header = True
         self.output_dir = ""
         self.process_func = None
+        self.log_queue = multiprocessing.Queue(-1)
+
+        log_format = logging.Formatter('[%(asctime)s] - %(message)s')
+        self.log = logging.getLogger(__name__)
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(log_format)
+
 
     @staticmethod
     def _find_db_table(db_filename: str) -> str:
@@ -59,7 +67,7 @@ class Engine:
             reader = csv.reader(input_file)
 
             # Initialize variables for the output files
-            current_output_file = open(f"{output_dir}/output_1.csv", 'w')
+            current_output_file = open(f"{output_dir}/output-1.csv", 'w')
             output_files = [current_output_file]
             writer = csv.writer(current_output_file)
             current_line_count = 0
@@ -72,7 +80,7 @@ class Engine:
             for row in reader:
                 if current_line_count >= max_lines:
                     current_line_count = 0
-                    current_output_file = open(f"{output_dir}/output_{len(output_files) + 1}.csv", 'w', newline='')
+                    current_output_file = open(f"{output_dir}/output-{len(output_files) + 1}.csv", 'w', newline='')
                     writer = csv.writer(current_output_file)
                     if with_header:
                         writer.writerow(header)
@@ -84,6 +92,8 @@ class Engine:
             # Close all output files
             for file in output_files:
                 file.close()
+
+            return output_files
 
     def _process_csv(self, index: int):
         """The process_csv function takes an index, a process_func function and an optional has_header boolean
@@ -141,12 +151,13 @@ class Engine:
         - If the table has a primary key field it MUST NOT have duplicate values in the input databases
         - Be cautious when merging data, as no schema compatibility checks are performed.
         """
-        input_files = glob.glob(f'{self.output_dir}/output_*.db')
+        input_files = glob.glob(f'{self.output_dir}/output-*.db')
         if not input_files:
             raise RuntimeError('No matching DB files')
 
+        output_db = f'{self.output_dir}/output.db'
         # copy the first file to the output file (so, the output file will have the schema already
-        shutil.copyfile(input_files[0], 'output.db')
+        shutil.copyfile(input_files[0], output_db)
 
         # dump data from other input files and import into the output file
         temp_sql_file = f'{self.output_dir}/db.sql'
@@ -158,15 +169,15 @@ class Engine:
             sh.sqlite3(f, commands)
 
             # Import temp SQL file into output DB
-            sh.sqlite3(f'{self.output_dir}/output.db', f'.read {temp_sql_file}')
+            sh.sqlite3(output_db, f'.read {temp_sql_file}')
 
     def run(self,
             csv_filename: str,
             max_lines: int,
             template_db_filename: str,
-            process_func: types.FunctionType,
+            process_func: callable,
             output_dir=".",
-            with_header=True):
+            with_header=True) -> str:
         if not os.path.isfile(csv_filename):
             raise RuntimeError(f'no such file: {csv_filename}')
 
@@ -179,6 +190,7 @@ class Engine:
         if process_func is None:
             raise RuntimeError(f'process func cannot be None')
 
+        self.output_dir = output_dir
         self.has_header = with_header
         self.table_name = self._find_db_table(template_db_filename)
 
@@ -187,7 +199,7 @@ class Engine:
         # The input data for parallel processing function - a dictionary of a small csv file and an empty sqlite db
         # Create corresponding sqlite DB and cursor for each csv file
         for i in range(len(csv_files)):
-            db_filename = 'f{output}-{i}.db'
+            db_filename = f'{self.output_dir}/output-{i + 1}.db'
             shutil.copyfile(template_db_filename, db_filename)
             self.db_files.append(db_filename)
             db_conn = sqlite3.connect(db_filename)
@@ -203,3 +215,6 @@ class Engine:
 
         # Done processing, merge all small sqlite DBs
         self._merge_sqlite_dbs()
+
+        # Return path to output DB
+        return f'{self.output_dir}/output.db'

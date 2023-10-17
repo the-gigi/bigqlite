@@ -45,7 +45,7 @@ class TestSplitCSV(unittest.TestCase):
 
         # Check the contents of the smaller files
         for i in range(1, 4):
-            smaller_file = os.path.join(self.test_dir, f"output_{i}.csv")
+            smaller_file = os.path.join(self.test_dir, f"output-{i}.csv")
             with open(smaller_file, 'r', newline='') as f:
                 reader = csv.reader(f)
                 lines = list(reader)
@@ -66,7 +66,7 @@ class TestProcessCSV(unittest.TestCase):
 
         self.engine = Engine()
         self.engine.csv_files = [test_file]
-        # Create a sample CSV file with a header and data
+        # Create a CSV file with a header and data
         with open(test_file, 'w') as csv_file:
             writer = csv.writer(csv_file)
             writer.writerow(["col_1", "col_2"])  # Header
@@ -128,7 +128,7 @@ class TestMergeSQLiteDBs(unittest.TestCase):
 
         self.engine = Engine()
         # Create temporary SQLite database files for testing
-        self.engine.db_files = [f"{self.test_dir}/output_{i}.db" for i in (1, 2)]
+        self.engine.db_files = [f"{self.test_dir}/output-{i}.db" for i in (1, 2)]
         self.engine.output_dir = self.test_dir
         self.engine.table_name = "t"
 
@@ -138,7 +138,7 @@ class TestMergeSQLiteDBs(unittest.TestCase):
         for conn in self.engine.db_connections:
             conn.execute(create_table_cmd)
 
-        # Create the output DB as a copy of one of the DB file with the schemam but without data
+        # Create the output DB as a copy of one of the DB file with the schema but without data
         shutil.copyfile(self.engine.db_files[0], f"{self.test_dir}/output.db")
 
         # Insert sample data
@@ -167,9 +167,62 @@ class TestMergeSQLiteDBs(unittest.TestCase):
         output_db = f'{self.engine.output_dir}/output.db'
         self.assertTrue(os.path.isfile(output_db))
 
-        expected_data = set((("Alice",), ("Bob",), ("Charlie",), ("David",)))
+        expected_data = {("Alice",), ("Bob",), ("Charlie",), ("David",)}
         with sqlite3.connect(output_db) as conn_output:
             cursor = conn_output.cursor()
+            cursor.execute(f"SELECT * FROM {self.engine.table_name};")
+            data = set(cursor.fetchall())
+            self.assertEqual(data, expected_data)
+
+
+class TestRun(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = "test_dir"
+        self.test_file = f"{self.test_dir}/test.csv"
+        self.tearDown()
+        os.makedirs(self.test_dir, exist_ok=True)
+
+        self.engine = Engine()
+
+        # Create the template DB
+        self.db_file = f'{self.test_dir}/template.db'
+        create_table_cmd = f"CREATE TABLE t (name TEXT);"
+        with sqlite3.connect(self.db_file) as conn:
+            conn.execute(create_table_cmd)
+
+        # Create the input csv file
+        with open(self.test_file, 'w') as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(["name"])  # Header
+            writer.writerow(["Arnold"])
+            writer.writerow(["Bart"])
+            writer.writerow(["Charles"])
+            writer.writerow(["Donald"])
+
+    def tearDown(self):
+        if not os.path.isdir(self.test_dir):
+            return
+
+        for root, dirs, files in os.walk(self.test_dir, topdown=False):
+            for name in files:
+                os.remove(os.path.join(root, name))
+            for name in dirs:
+                os.rmdir(os.path.join(root, name))
+        os.rmdir(self.test_dir)
+
+    @staticmethod
+    def proces_func(self, row):
+        if row[0] == "Bart":
+            return None
+        return [x.lower() for x in row]
+
+    def test_run(self):
+        output_db = self.engine.run(self.test_file, 2, self.db_file, self.proces_func, self.test_dir, with_header=True)
+
+        expected_data = {("arnold",), ("charles",), ("donald",)}
+
+        with sqlite3.connect(output_db) as output_conn:
+            cursor = output_conn.cursor()
             cursor.execute(f"SELECT * FROM {self.engine.table_name};")
             data = set(cursor.fetchall())
             self.assertEqual(data, expected_data)

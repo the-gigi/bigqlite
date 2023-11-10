@@ -17,12 +17,12 @@ a run() method, which accepts several parameters:
             with_header=True) -> str:
 ```
 
-`csv_filename` is a path to a large csv file.
-`max_lines` is the number of lines in each small csv_file (determines how to split the big file)
-`template_db_filename` is an empty sqlite DB with the correct schema to insert the data from the csv file
-`process_func`: a function that is run on each row from the csv file. It can modify the row or skip it by returning None
-`output_dir`: the directory to store all the intermediary files as well as the final sqlite DB - output.db
-`with_header`: a boolean that tells the program if the csv file has a header or just data
+- `csv_filename` is a path to a large csv file.
+- `max_lines` is the number of lines in each small csv_file (determines how to split the big file)
+- `template_db_filename` is an empty sqlite DB with the correct schema to insert the data from the csv file
+- `process_func`: a function that is run on each row from the csv file. It can modify the row or skip it by returning None
+- `output_dir`: the directory to store all the intermediary files as well as the final sqlite DB - output.db
+- `with_header`: a boolean that tells the program if the csv file has a header or just data
 
 # Requirements
 

@@ -66,6 +66,7 @@ class TestProcessCSV(unittest.TestCase):
 
         self.engine = Engine()
         self.engine.csv_files = [test_file]
+        self.engine.output_dir = self.test_dir
         # Create a CSV file with a header and data
         with open(test_file, 'w') as csv_file:
             writer = csv.writer(csv_file)
@@ -75,17 +76,10 @@ class TestProcessCSV(unittest.TestCase):
             writer.writerow(["c", "3"])
 
             # Create temporary SQLite database files for testing
-            db_file = f"{self.test_dir}/test.db"
-
-            # Connect to the test databases and create a table
-            conn = sqlite3.connect(db_file)
+            conn = self.engine.get_db_connection(self.test_dir, 0)
             conn.execute(f"CREATE TABLE t (col_1 TEXT,\n\tcol_2 INT);")
             conn.commit()
 
-            self.assertTrue(os.path.isfile(db_file))
-
-            self.engine.db_files = [db_file]
-            self.engine.db_connections = [conn]
             self.engine.table_name = "t"
             self.engine.process_func = self.process_func
 
@@ -105,8 +99,9 @@ class TestProcessCSV(unittest.TestCase):
         return [line[0], 10 + int(line[1])]
 
     def test_process_csv_with_header(self):
-        self.engine._process_csv(0)
-        cursor = self.engine.db_connections[0].cursor()
+        self.engine._process_csv(0, process_func=self.process_func, has_header=True)
+        conn = self.engine.get_db_connection(self.test_dir, 0)
+        cursor = conn.cursor()
 
         # Get a list of all tables in the database
         cursor.execute(f"SELECT * FROM {self.engine.table_name};")
@@ -211,7 +206,7 @@ class TestRun(unittest.TestCase):
         os.rmdir(self.test_dir)
 
     @staticmethod
-    def proces_func(self, row):
+    def proces_func(row):
         if row[0] == "Bart":
             return None
         return [x.lower() for x in row]

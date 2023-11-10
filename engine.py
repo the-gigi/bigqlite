@@ -1,12 +1,12 @@
 import csv
 import functools
 import glob
-import logging
+#import logging
 import multiprocessing
 import os
 import shutil
 import sqlite3
-import sys
+#import sys
 
 import sh
 
@@ -15,18 +15,17 @@ class Engine:
     def __init__(self):
         self.csv_files = []
         self.db_files = []
-        self.db_connections = []
 
         self.table_name = ""
         self.has_header = True
         self.output_dir = ""
         self.process_func = None
-        self.log_queue = multiprocessing.Queue(-1)
-
-        log_format = logging.Formatter('[%(asctime)s] - %(message)s')
-        self.log = logging.getLogger(__name__)
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(log_format)
+        # self.log_queue = multiprocessing.Queue(-1)
+        #
+        # log_format = logging.Formatter('[%(asctime)s] - %(message)s')
+        # self.log = logging.getLogger(__name__)
+        # handler = logging.StreamHandler(sys.stdout)
+        # handler.setFormatter(log_format)
 
 
     @staticmethod
@@ -62,12 +61,15 @@ class Engine:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
 
+        csv_files = []
         # Open the input CSV file for reading
         with open(filename, 'r', newline='') as input_file:
             reader = csv.reader(input_file)
 
             # Initialize variables for the output files
-            current_output_file = open(f"{output_dir}/output-1.csv", 'w')
+            filename = f"{output_dir}/output-1.csv"
+            csv_files = [filename]
+            current_output_file = open(filename, 'w')
             output_files = [current_output_file]
             writer = csv.writer(current_output_file)
             current_line_count = 0
@@ -80,7 +82,9 @@ class Engine:
             for row in reader:
                 if current_line_count >= max_lines:
                     current_line_count = 0
-                    current_output_file = open(f"{output_dir}/output-{len(output_files) + 1}.csv", 'w', newline='')
+                    filename = f"{output_dir}/output-{len(output_files) + 1}.csv"
+                    csv_files.append(filename)
+                    current_output_file = open(filename, 'w', newline='')
                     writer = csv.writer(current_output_file)
                     if with_header:
                         writer.writerow(header)
@@ -93,9 +97,9 @@ class Engine:
             for file in output_files:
                 file.close()
 
-            return output_files
+            return csv_files
 
-    def _process_csv(self, index: int):
+    def _process_csv(self, index: int, process_func: callable, has_header: bool, out=None):
         """The process_csv function takes an index, a process_func function and an optional has_header boolean
 
         It reads the csv lines one by one and passes them to the process_func
@@ -104,17 +108,22 @@ class Engine:
 
         If there is a header it skips it
         """
+        if out is not None:
+            out(f'{index}: start')
         filename = self.csv_files[index]  # Get current csn file
-        db = self.db_connections[index]  # Get cursor to current DB file
+        db = self.get_db_connection(self.output_dir, index)
 
         with open(filename, 'r', newline='') as csv_file:
             reader = csv.reader(csv_file)
-            if self.has_header:
+            if has_header:
                 _ = next(reader)  # Read the header in order to skip it
 
-            for line in reader:
+            for i, line in enumerate(reader):
+                if out is not None:
+                    out('{index}: line {i}')
+
                 # run the current line though the process func
-                result = self.process_func(line)
+                result = process_func(line)
 
                 # If the result is None, skip it
                 if result is None:
@@ -126,7 +135,9 @@ class Engine:
                 try:
                     db.execute(cmd, result)
                 except Exception as e:
+                    out(f'{index}: error - {e.message}')
                     raise e
+        db.commit()
 
     def _merge_sqlite_dbs(self):
         """
@@ -161,7 +172,7 @@ class Engine:
 
         # dump data from other input files and import into the output file
         temp_sql_file = f'{self.output_dir}/db.sql'
-        for f in input_files:
+        for f in input_files[1:]:
             # Dump data to temp SQL file
             commands = [f'.mode insert {self.table_name}',
                         f'.out {temp_sql_file}',
@@ -170,6 +181,15 @@ class Engine:
 
             # Import temp SQL file into output DB
             sh.sqlite3(output_db, f'.read {temp_sql_file}')
+
+    @staticmethod
+    def get_db_filename(output_dir, i):
+        return f'{output_dir}/output-{i + 1}.db'
+
+    @staticmethod
+    def get_db_connection(output_dir, i):
+        filename = Engine.get_db_filename(output_dir, i)
+        return sqlite3.connect(filename)
 
     def run(self,
             csv_filename: str,
@@ -194,25 +214,24 @@ class Engine:
         self.has_header = with_header
         self.table_name = self._find_db_table(template_db_filename)
 
-        csv_files = self._split_csv(csv_filename, max_lines, output_dir, with_header)
+        self.csv_files = self._split_csv(csv_filename, max_lines, output_dir, with_header)
 
-        # The input data for parallel processing function - a dictionary of a small csv file and an empty sqlite db
-        # Create corresponding sqlite DB and cursor for each csv file
-        for i in range(len(csv_files)):
-            db_filename = f'{self.output_dir}/output-{i + 1}.db'
+        # Create corresponding sqlite DB for each csv file with the same schema
+        for i in range(len(self.csv_files)):
+            db_filename = self.get_db_filename(self.output_dir, i)
             shutil.copyfile(template_db_filename, db_filename)
-            self.db_files.append(db_filename)
-            db_conn = sqlite3.connect(db_filename)
-            self.db_connections.append(db_conn)
+
+        # Define output queue
+        out = multiprocessing.Queue()
 
         # Define a partial function that can be used as argument to the pool.Map() method
         f = functools.partial(self._process_csv, process_func=process_func, has_header=with_header)
-
         # Create a process pool with the number of CPU cores available
         with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
             # Process the csv files in parallel
             results = pool.map(f, range(len(self.csv_files)))
 
+        pool.join()
         # Done processing, merge all small sqlite DBs
         self._merge_sqlite_dbs()
 

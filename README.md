@@ -1,11 +1,11 @@
 # Bigqlite
 
 Bigqlite processes large csv files, by splitting them into multiple smaller csv files,
-processing in paraallel each csv file (by running a custom process function) and saves the
-results of to a sqlite DB per csv file. Then, it merges all the small sqlite DBs into a single sqlite DB 
+processing in parallel each csv file (by running a custom `process()` function) and saves the
+results to a sqlite DB per csv file. Then, it merges all the small sqlite DBs into a single sqlite DB 
 
 It is designed to be used as a library in your application. The Engine class provides
-a run() method, which accepts several parameters:
+a `run()` method, which accepts several parameters:
 
 ```
     def run(self,
